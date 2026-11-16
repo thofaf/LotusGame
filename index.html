@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lotus Elise – Stelvio</title>
+<style>
+  :root { --bg: rgba(12,14,16,.86); --fg: #eef2f4; --dim: #9aa5ad; --acc: #f2c200; --green: #0f6b3a; --red: #ff4d4d; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d0f; color: var(--fg); font: 15px/1.4 "Segoe UI", system-ui, sans-serif; }
+  #view, #view canvas { position: fixed; inset: 0; display: block; }
+  .hidden { display: none !important; }
+
+  /* laddning */
+  #loading { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+    background: radial-gradient(ellipse at 50% 30%, #1d2a33, #07090b); z-index: 30; }
+  #loading h1, #main h1 { margin: 0; font-weight: 800; letter-spacing: .06em; }
+  #loading h1 span, #main h1 span { color: var(--acc); }
+  .bar { display: inline-block; width: 120px; height: 8px; background: #222; border-radius: 4px; overflow: hidden; vertical-align: middle; }
+  .bar i { display: block; height: 100%; background: var(--acc); }
+  #load-outer { width: min(560px, 80vw); height: 10px; border-radius: 5px; background: #222a30; overflow: hidden; }
+  #load-bar { height: 100%; width: 0; background: linear-gradient(90deg, var(--green), var(--acc)); transition: width .2s; }
+  #load-text { color: var(--dim); }
+
+  /* menyer */
+  #menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.45); z-index: 20; }
+  .panel { width: min(640px, 92vw); max-height: 90vh; overflow: auto; background: var(--bg); border: 1px solid #2c343a; border-radius: 14px; padding: 26px 28px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+  .panel h2 { margin: 0 0 14px; }
+  .panel p { color: var(--dim); }
+  .btn { background: var(--acc); color: #111; border: 0; border-radius: 8px; padding: 10px 18px; font-weight: 700; font-size: 15px; cursor: pointer; }
+  .btn:disabled { opacity: .5; cursor: wait; }
+  .btn.ghost { background: transparent; color: var(--fg); border: 1px solid #44505a; }
+  .btn.big { font-size: 20px; padding: 14px 30px; }
+  .col { display: flex; flex-direction: column; gap: 10px; margin-top: 18px; }
+  .row { display: flex; gap: 10px; align-items: center; margin-top: 18px; flex-wrap: wrap; }
+  #bind-summary { margin-top: 14px; color: var(--dim); font-size: 13px; }
+  #credits { margin-top: 12px; color: #6f7a82; font-size: 11px; }
+  .keys { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; font-size: 13px; color: var(--dim); margin-top: 10px; }
+  .keys b { color: var(--fg); font-weight: 600; }
+  .srow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid #222a30; }
+  .srow span:first-child { flex: 1; }
+  .srow input[type=range] { width: 160px; }
+  .srow output { width: 40px; text-align: right; color: var(--dim); }
+  .srow select { background: #1a2026; color: var(--fg); border: 1px solid #3a444c; border-radius: 6px; padding: 5px; }
+  .shead { margin: 22px 0 4px; font-size: 15px; color: var(--acc); text-transform: uppercase; letter-spacing: .06em; }
+  .mrow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 6px 0; }
+  .mrow .btn { padding: 6px 12px; font-size: 13px; }
+  .mlive { display: flex; gap: 24px; font-size: 13px; padding: 4px 0 8px; border-bottom: 1px solid #222a30; }
+  .mlive .bar { width: 160px; position: relative; }
+  .mlive .bar::after { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: #888; }
+  #fov-info { font-size: 13px; padding: 6px 0 8px; border-bottom: 1px solid #222a30; }
+  .swatches { display: inline-flex; gap: 4px; margin-left: 8px; }
+  .swatches i { width: 18px; height: 18px; border-radius: 50%; border: 1px solid #555; cursor: pointer; display: inline-block; }
+  .cal-step { color: var(--acc); font-weight: 700; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; }
+  .cal-text { font-size: 18px; color: var(--fg) !important; }
+  .cal-live { min-height: 60px; padding: 12px; background: #101418; border-radius: 8px; font-family: Consolas, monospace; font-size: 13px; }
+  .cal-live .dev { margin-bottom: 6px; }
+  .warn { color: var(--red); font-weight: 700; }
+  .dim { color: var(--dim); }
+
+  /* HUD */
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+  #hud-left { position: absolute; left: 20px; top: 16px; }
+  #hud-time { font-size: 30px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  #hud-best, #hud-dist, #hud-device { color: #d8dee2; font-size: 14px; }
+  #hud-progress { width: 260px; height: 6px; background: rgba(0,0,0,.4); border-radius: 3px; margin: 6px 0; overflow: hidden; }
+  #hud-prog { height: 100%; width: 0; background: var(--acc); }
+  #hud-right { position: absolute; right: 26px; bottom: 22px; text-align: right; }
+  #hud-speed { font-size: 64px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+  #hud-speed + small { color: var(--dim); }
+  #hud-gear { position: absolute; right: 170px; bottom: 4px; font-size: 54px; font-weight: 800; color: var(--acc); }
+  #hud-rpmwrap { width: 300px; height: 10px; background: rgba(0,0,0,.45); border-radius: 5px; margin-top: 8px; overflow: hidden; margin-left: auto; }
+  #hud-rpmbar { height: 100%; width: 0; background: #7fd0ff; }
+  #hud-rpmbar.vvtl { background: var(--acc); }
+  #hud-rpmbar.red { background: var(--red); }
+  #hud-rpm { font-size: 13px; color: var(--dim); }
+  #hud-flags { position: absolute; left: 50%; top: 18px; transform: translateX(-50%); display: flex; gap: 12px; font-weight: 700; font-size: 14px; }
+  #pedals { position: absolute; left: 20px; bottom: 20px; display: flex; gap: 6px; align-items: flex-end; }
+  #pedals .p { width: 12px; height: 70px; background: rgba(0,0,0,.4); border-radius: 3px; position: relative; overflow: hidden; }
+  #pedals .p i { position: absolute; bottom: 0; left: 0; right: 0; }
+  #p-clutch { background: #7fd0ff; } #p-brake { background: var(--red); } #p-thr { background: #3ddc84; }
+  #p-steer { width: 52px; height: 52px; border: 5px solid #ddd; border-radius: 50%; margin-left: 10px; position: relative; }
+  #p-steer::after { content: ''; position: absolute; left: 50%; top: -5px; width: 4px; height: 10px; margin-left: -2px; background: var(--acc); }
+  #minimap { position: absolute; right: 16px; top: 14px; width: 360px; height: 92px; background: rgba(0,0,0,.35); border-radius: 8px; }
+  #toast { position: fixed; left: 50%; top: 30%; transform: translateX(-50%); background: rgba(0,0,0,.7); padding: 10px 22px; border-radius: 8px;
+    font-size: 20px; font-weight: 700; opacity: 0; transition: opacity .25s; z-index: 25; pointer-events: none; }
+  #toast.show { opacity: 1; }
+  #finish { position: fixed; left: 50%; top: 22%; transform: translateX(-50%); text-align: center; background: var(--bg); padding: 22px 40px; border-radius: 14px; z-index: 15; border: 1px solid var(--acc); }
+  #finish-time { font-size: 52px; font-weight: 800; color: var(--acc); }
+</style>
+</head>
+<body>
+<div id="view"></div>
+
+<div id="loading">
+  <h1>LOTUS ELISE <span>·</span> STELVIO</h1>
+  <div id="load-outer"><div id="load-bar"></div></div>
+  <div id="load-text">Startar…</div>
+</div>
+
+<div id="menu">
+  <div class="panel" id="main">
+    <h1 style="font-size:28px">LOTUS ELISE <span>·</span> STELVIO</h1>
+    <p>Backklättring uppför alpvägarna mot Passo dello Stelvio i en Elise S2 med 1,8-liters Toyota 2ZZ-GE och sexväxlad manuell låda.</p>
+    <div class="col">
+      <button class="btn big" id="btn-start" disabled>Laddar banan…</button>
+      <button class="btn ghost" data-open="calib">🎮 Kalibrera Thrustmaster-ratt, pedaler och växelspak</button>
+      <button class="btn ghost" data-open="settings">⚙ Inställningar</button>
+      <button class="btn ghost" data-open="help">Kontroller</button>
+    </div>
+    <div id="bind-summary"></div>
+    <div id="credits"></div>
+  </div>
+
+  <div class="panel hidden" id="pause">
+    <h2>Paus</h2>
+    <div class="col">
+      <button class="btn" id="btn-resume">Fortsätt</button>
+      <button class="btn ghost" id="btn-reset">Återställ bilen till vägen</button>
+      <button class="btn ghost" id="btn-restart">Starta om från början</button>
+      <button class="btn ghost" data-open="calib">🎮 Kalibrera ratt / pedaler / växelspak</button>
+      <button class="btn ghost" data-open="settings">⚙ Inställningar</button>
+      <button class="btn ghost" data-open="help">Kontroller</button>
+    </div>
+  </div>
+
+  <div class="panel hidden" id="settings">
+    <h2>Inställningar</h2>
+    <div id="settings-form"></div>
+    <div class="row"><button class="btn ghost" id="btn-clear-bind">Rensa rattkalibrering</button><span style="flex:1"></span><button class="btn" data-back>Klar</button></div>
+  </div>
+
+  <div class="panel hidden" id="calib">
+    <h2>Kalibrering – Thrustmaster</h2>
+    <p>Fungerar med T150, TMX, T248, T300, TS-XW, T-GT m.fl. tillsammans med T3PA/T-LCM-pedaler (3 pedaler) och TH8A/TH8S-växelspak.
+      Anslut allt via USB innan du öppnar spelet. Ställ in rotationen i Thrustmaster Control Panel (t.ex. 900°) och samma värde under Inställningar.</p>
+    <div id="cal-body"></div>
+  </div>
+
+  <div class="panel hidden" id="help">
+    <h2>Kontroller</h2>
+    <div class="keys">
+      <b>Ratt / pedaler</b><span>Styrning, gas, broms och koppling (3 pedaler)</span>
+      <b>TH8A H-växel</b><span>1–6 och R. Trampa ur kopplingen innan du lägger i växeln, annars skrapar det.</span>
+      <b>Paddlar</b><span>Växla upp/ned (sekventiellt)</span>
+      <b>Piltangenter / WASD</b><span>Styr, gas (↑/W), broms (↓/S)</span>
+      <b>X</b><span>Koppling (tangentbord)</span>
+      <b>E / Q</b><span>Växla upp / ned</span>
+      <b>1–6, N, + eller §</b><span>Välj växel direkt, friläge, back</span>
+      <b>Mellanslag</b><span>Handbroms</span>
+      <b>C</b><span>Byt kamera (jakt, förarplats, huv, lång jakt)</span>
+      <b>, / . (håll)</b><span>Titta åt vänster / höger</span>
+      <b>B (håll)</b><span>Titta bakåt</span>
+      <b>Högra spaken</b><span>Titta runt (handkontroll)</span>
+      <b>R</b><span>Återställ bilen till vägen</span>
+      <b>I</b><span>Starta motorn efter motorstopp</span>
+      <b>Esc / P</b><span>Paus</span>
+    </div>
+    <p>Kraftåterkoppling (force feedback) stöds tyvärr inte av webbläsarens Gamepad-gränssnitt, så ratten får ingen motkraft.</p>
+    <div class="row"><span style="flex:1"></span><button class="btn" data-back>Tillbaka</button></div>
+  </div>
+</div>
+
+<div id="hud" class="hidden">
+  <div id="hud-left">
+    <div id="hud-time">0:00.00</div>
+    <div id="hud-progress"><div id="hud-prog"></div></div>
+    <div id="hud-dist"></div>
+    <div id="hud-best"></div>
+    <div id="hud-device"></div>
+  </div>
+  <div id="hud-flags"></div>
+  <canvas id="minimap" width="720" height="184"></canvas>
+  <div id="hud-right">
+    <div id="hud-gear">N</div>
+    <div id="hud-speed">0</div><small>km/h</small>
+    <div id="hud-rpmwrap"><div id="hud-rpmbar"></div></div>
+    <div id="hud-rpm">0</div>
+  </div>
+  <div id="pedals">
+    <div class="p"><i id="p-clutch"></i></div>
+    <div class="p"><i id="p-brake"></i></div>
+    <div class="p"><i id="p-thr"></i></div>
+    <div id="p-steer"></div>
+  </div>
+</div>
+<div id="toast"></div>
+<div id="finish" class="hidden">
+  <div>MÅL – Passo dello Stelvio</div>
+  <div id="finish-time"></div>
+  <div id="finish-best"></div>
+</div>
+
+<script type="importmap">{ "imports": { "three": "./js/lib/three.module.js" } }</script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
