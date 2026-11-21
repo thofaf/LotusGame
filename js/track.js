@@ -37,6 +37,21 @@ export class Spline {
     }
   }
   key(x, z) { return Math.floor(x / this.cell) * 100003 + Math.floor(z / this.cell); }
+  // Rundbana: ny spline som börjar vid index `begin` och fortsätter `total` punkter runt slingan (modulo n).
+  // Punkt i och i + n i resultatet ligger på samma ställe, så ett helt varv blir en sträcka från A till B.
+  unrolled(begin, total) {
+    const n = this.n, pts = new Float32Array(total * 3), dist = new Float32Array(total);
+    const left = new Float32Array(total), right = new Float32Array(total);
+    for (let k = 0; k < total; k++) {
+      const j = (((begin + k) % n) + n) % n;
+      pts[k * 3] = this.pts[j * 3]; pts[k * 3 + 1] = this.pts[j * 3 + 1]; pts[k * 3 + 2] = this.pts[j * 3 + 2];
+      left[k] = this.left[j]; right[k] = this.right[j];
+      if (k > 0) dist[k] = dist[k - 1] + Math.hypot(pts[k * 3] - pts[k * 3 - 3], pts[k * 3 + 1] - pts[k * 3 - 2], pts[k * 3 + 2] - pts[k * 3 - 1]);
+    }
+    const s = new Spline(pts, dist, left, right);
+    s.lapPoints = n;
+    return s;
+  }
   point(i, out = new THREE.Vector3()) { i = Math.max(0, Math.min(this.n - 1, i)); return out.set(this.pts[i * 3], this.pts[i * 3 + 1], this.pts[i * 3 + 2]); }
   tangent(i, out = new THREE.Vector3()) {
     const a = Math.max(0, i - 3), b = Math.min(this.n - 1, i + 3);

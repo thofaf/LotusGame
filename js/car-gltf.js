@@ -1,4 +1,4 @@
-// Lotus Elise från glTF-modell (assets/2018_lotus_elise_sprint_220).
+// Lotus Elise från glTF-modell (assets/cars/2018_lotus_elise_sprint_220).
 // Modell: "2018 Lotus Elise Sprint 220" av Ddiaz Design, CC-BY-NC-SA-4.0 (se license.txt i mappen).
 // Ger samma gränssnitt som buildCarModel() i car-model.js men med setWheels()/setSteer().
 // Lokala axlar (som fysiken): +Z fram, +Y upp, +X vänster. Origo i tyngdpunkten.
@@ -6,7 +6,7 @@ import * as THREE from './lib/three.module.js';
 import { GLTFLoader } from './lib/addons/loaders/GLTFLoader.js';
 import { ELISE } from './car-physics.js';
 
-const URL = 'assets/2018_lotus_elise_sprint_220/scene.gltf';
+const URL = 'assets/cars/2018_lotus_elise_sprint_220/scene.gltf';
 const LENGTH = 3.824; // Elise S3, meter
 const WHEELS = ['FL', 'FR', 'BL', 'BR']; // samma ordning som fysiken: FL, FR, RL, RR
 

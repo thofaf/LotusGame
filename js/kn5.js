@@ -146,7 +146,9 @@ uniform sampler2D txMask; uniform sampler2D txDR; uniform sampler2D txDG; unifor
 uniform vec4 detailMul; uniform sampler2D txDetail; uniform float detailUV; uniform float diffUV;
 `;
 
-function makeMaterial(def, tex) {
+// opts.detailWorld: ksMultilayer-detaljer mappas i världskoordinater (mult = repetitioner per meter).
+// Kunos egna banor (t.ex. Nürburgring) är byggda så; med UV-mappning blir asfaltens korn decimeterstora fläckar.
+function makeMaterial(def, tex, opts = {}) {
   const P = def.props;
   const get = k => tex.get(def.tex[k]);
   const diffuse = get('txDiffuse');
@@ -156,9 +158,11 @@ function makeMaterial(def, tex) {
   if (diffuse) mat.map = diffuse;
   const sh = def.shader;
   const uniforms = {};
-  let fragCode = null;
+  let fragCode = null, worldDetail = false;
 
   if (sh.startsWith('ksMultilayer') && get('txMask')) {
+    worldDetail = !!opts.detailWorld;
+    const duv = worldDetail ? 'vDetailW' : 'vMapUv';
     const m = k => { const v = P[k]; return v ? v : 1; };
     const fallback = diffuse;
     Object.assign(uniforms, {
@@ -171,10 +175,10 @@ function makeMaterial(def, tex) {
 #ifdef USE_MAP
   vec4 baseC = texture2D(map, vMapUv);
   vec4 msk = texture2D(txMask, vMapUv);
-  vec3 det = texture2D(txDR, vMapUv * detailMul.x).rgb * msk.r
-           + texture2D(txDG, vMapUv * detailMul.y).rgb * msk.g
-           + texture2D(txDB, vMapUv * detailMul.z).rgb * msk.b
-           + texture2D(txDA, vMapUv * detailMul.w).rgb * msk.a;
+  vec3 det = texture2D(txDR, ${duv} * detailMul.x).rgb * msk.r
+           + texture2D(txDG, ${duv} * detailMul.y).rgb * msk.g
+           + texture2D(txDB, ${duv} * detailMul.z).rgb * msk.b
+           + texture2D(txDA, ${duv} * detailMul.w).rgb * msk.a;
   diffuseColor.rgb *= baseC.rgb * det;
 #endif`;
   } else if (sh.startsWith('ksPerPixelMultiMap') && P.useDetail && get('txDetail')) {
@@ -207,17 +211,22 @@ function makeMaterial(def, tex) {
     mat.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, uniforms);
       shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', '#include <common>\n' + DETAIL_HEAD)
+        .replace('#include <common>', '#include <common>\n' + DETAIL_HEAD + (worldDetail ? 'varying vec2 vDetailW;\n' : ''))
         .replace('#include <map_fragment>', fragCode);
+      if (worldDetail) {
+        shader.vertexShader = shader.vertexShader
+          .replace('#include <common>', '#include <common>\nvarying vec2 vDetailW;')
+          .replace('#include <project_vertex>', '#include <project_vertex>\n  vDetailW = (modelMatrix * vec4(transformed, 1.0)).xz;');
+      }
     };
-    mat.customProgramCacheKey = () => def.shader + '|' + Object.keys(uniforms).join(',');
+    mat.customProgramCacheKey = () => def.shader + '|' + Object.keys(uniforms).join(',') + (worldDetail ? '|w' : '');
   }
 
   if (def.blend === 1) {
     mat.transparent = true; mat.depthWrite = false;
     mat.polygonOffset = true; mat.polygonOffsetFactor = -2; mat.polygonOffsetUnits = -2;
     mat.side = THREE.DoubleSide;
-  } else if (def.alphaTested) {
+  } else if (def.alphaTested || /^ks(Grass|Tree|PerPixelAT)/.test(sh)) { // gräs/träd/AT-shaders alfatestas alltid i AC
     mat.alphaTest = 0.5; mat.side = THREE.DoubleSide;
   }
   if ((P.ksEmissive || 0) > 0) mat.emissive = new THREE.Color(P.ksEmissive, P.ksEmissive, P.ksEmissive);
@@ -231,7 +240,7 @@ export async function buildKN5(kn5, renderer, opts = {}) {
   let mats = [];
   if (visual) {
     const tex = await buildTextures(kn5, renderer, usedTextureNames(kn5));
-    mats = kn5.materials.map(m => makeMaterial(m, tex));
+    mats = kn5.materials.map(m => makeMaterial(m, tex, opts));
   }
   const meshes = [];
   function build(node) {
@@ -250,7 +259,9 @@ export async function buildKN5(kn5, renderer, opts = {}) {
       g.computeBoundingSphere();
       const def = kn5.materials[m.materialId];
       obj = new THREE.Mesh(g, visual ? mats[m.materialId] : undefined);
-      obj.visible = visual && m.isRenderable && m.isVisible && node.active && !node.name.startsWith('AC_');
+      // ksGrass: gräslager som AC expanderar till tuvor i shadern; utan den blir de svarta streck på marken
+      const grassLayer = def && def.shader === 'ksGrass';
+      obj.visible = visual && m.isRenderable && m.isVisible && node.active && !node.name.startsWith('AC_') && !grassLayer;
       obj.castShadow = m.castShadows && def && def.blend !== 1;
       obj.receiveShadow = true;
       obj.userData.matDef = def;

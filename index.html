@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Lotus Elise – Stelvio</title>
+<title>Lotus Elise</title>
 <style>
   :root { --bg: rgba(12,14,16,.86); --fg: #eef2f4; --dim: #9aa5ad; --acc: #f2c200; --green: #0f6b3a; --red: #ff4d4d; }
   * { box-sizing: border-box; }
@@ -47,6 +47,7 @@
   .mrow .btn { padding: 6px 12px; font-size: 13px; }
   .mlive { display: flex; gap: 24px; font-size: 13px; padding: 4px 0 8px; border-bottom: 1px solid #222a30; }
   .mlive .bar { width: 160px; position: relative; }
+  .fbar i { position: absolute; top: 0; left: 50%; width: 0; }
   .mlive .bar::after { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: #888; }
   #fov-info { font-size: 13px; padding: 6px 0 8px; border-bottom: 1px solid #222a30; }
   .swatches { display: inline-flex; gap: 4px; margin-left: 8px; }
@@ -65,15 +66,9 @@
   #hud-best, #hud-dist, #hud-device { color: #d8dee2; font-size: 14px; }
   #hud-progress { width: 260px; height: 6px; background: rgba(0,0,0,.4); border-radius: 3px; margin: 6px 0; overflow: hidden; }
   #hud-prog { height: 100%; width: 0; background: var(--acc); }
-  #hud-right { position: absolute; right: 26px; bottom: 22px; text-align: right; }
-  #hud-speed { font-size: 64px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
-  #hud-speed + small { color: var(--dim); }
-  #hud-gear { position: absolute; right: 170px; bottom: 4px; font-size: 54px; font-weight: 800; color: var(--acc); }
-  #hud-rpmwrap { width: 300px; height: 10px; background: rgba(0,0,0,.45); border-radius: 5px; margin-top: 8px; overflow: hidden; margin-left: auto; }
-  #hud-rpmbar { height: 100%; width: 0; background: #7fd0ff; }
-  #hud-rpmbar.vvtl { background: var(--acc); }
-  #hud-rpmbar.red { background: var(--red); }
-  #hud-rpm { font-size: 13px; color: var(--dim); }
+  #hud-tacho { position: absolute; right: 16px; bottom: 16px; width: min(40vh, 44vw); height: min(40vh, 44vw);
+    border-radius: 50%; box-shadow: 0 6px 24px rgba(0,0,0,.55); }
+  #hud-tacho.hidden { display: none; }
   #hud-flags { position: absolute; left: 50%; top: 18px; transform: translateX(-50%); display: flex; gap: 12px; font-weight: 700; font-size: 14px; }
   #pedals { position: absolute; left: 20px; bottom: 20px; display: flex; gap: 6px; align-items: flex-end; }
   #pedals .p { width: 12px; height: 70px; background: rgba(0,0,0,.4); border-radius: 3px; position: relative; overflow: hidden; }
@@ -81,10 +76,15 @@
   #p-clutch { background: #7fd0ff; } #p-brake { background: var(--red); } #p-thr { background: #3ddc84; }
   #p-steer { width: 52px; height: 52px; border: 5px solid #ddd; border-radius: 50%; margin-left: 10px; position: relative; }
   #p-steer::after { content: ''; position: absolute; left: 50%; top: -5px; width: 4px; height: 10px; margin-left: -2px; background: var(--acc); }
-  #minimap { position: absolute; right: 16px; top: 14px; width: 360px; height: 92px; background: rgba(0,0,0,.35); border-radius: 8px; }
+  #minimap { position: absolute; right: 16px; top: 14px; width: 360px; height: 92px; /* storlek sätts per bana */ background: rgba(0,0,0,.35); border-radius: 8px; }
   #toast { position: fixed; left: 50%; top: 30%; transform: translateX(-50%); background: rgba(0,0,0,.7); padding: 10px 22px; border-radius: 8px;
     font-size: 20px; font-weight: 700; opacity: 0; transition: opacity .25s; z-index: 25; pointer-events: none; }
   #toast.show { opacity: 1; }
+  #countdown { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 24; pointer-events: none;
+    font-size: min(45vh, 45vw); font-weight: 900; color: #fff; text-shadow: 0 0 30px rgba(0,0,0,.8), 0 6px 0 rgba(0,0,0,.5); font-variant-numeric: tabular-nums; }
+  #countdown.go { color: var(--acc); }
+  #countdown.pop { animation: cdpop .35s ease-out; }
+  @keyframes cdpop { from { transform: scale(1.35); opacity: .4; } to { transform: scale(1); opacity: 1; } }
   #finish { position: fixed; left: 50%; top: 22%; transform: translateX(-50%); text-align: center; background: var(--bg); padding: 22px 40px; border-radius: 14px; z-index: 15; border: 1px solid var(--acc); }
   #finish-time { font-size: 52px; font-weight: 800; color: var(--acc); }
 </style>
@@ -93,15 +93,16 @@
 <div id="view"></div>
 
 <div id="loading">
-  <h1>LOTUS ELISE <span>·</span> STELVIO</h1>
+  <h1>LOTUS ELISE <span>·</span> <b class="track-short" style="font-weight:inherit"></b></h1>
   <div id="load-outer"><div id="load-bar"></div></div>
   <div id="load-text">Startar…</div>
 </div>
 
 <div id="menu">
   <div class="panel" id="main">
-    <h1 style="font-size:28px">LOTUS ELISE <span>·</span> STELVIO</h1>
-    <p>Backklättring uppför alpvägarna mot Passo dello Stelvio i en Elise S2 med 1,8-liters Toyota 2ZZ-GE och sexväxlad manuell låda.</p>
+    <h1 style="font-size:28px">LOTUS ELISE <span>·</span> <b class="track-short" style="font-weight:inherit"></b></h1>
+    <label class="srow" style="border:0"><span>Bana</span><select id="track-select"></select></label>
+    <p id="track-desc"></p>
     <div class="col">
       <button class="btn big" id="btn-start" disabled>Laddar banan…</button>
       <button class="btn ghost" data-open="calib">🎮 Kalibrera Thrustmaster-ratt, pedaler och växelspak</button>
@@ -118,6 +119,7 @@
       <button class="btn" id="btn-resume">Fortsätt</button>
       <button class="btn ghost" id="btn-reset">Återställ bilen till vägen</button>
       <button class="btn ghost" id="btn-restart">Starta om från början</button>
+      <button class="btn ghost" id="btn-track">Byt bana</button>
       <button class="btn ghost" data-open="calib">🎮 Kalibrera ratt / pedaler / växelspak</button>
       <button class="btn ghost" data-open="settings">⚙ Inställningar</button>
       <button class="btn ghost" data-open="help">Kontroller</button>
@@ -156,7 +158,9 @@
       <b>I</b><span>Starta motorn efter motorstopp</span>
       <b>Esc / P</b><span>Paus</span>
     </div>
-    <p>Kraftåterkoppling (force feedback) stöds tyvärr inte av webbläsarens Gamepad-gränssnitt, så ratten får ingen motkraft.</p>
+    <p>Force feedback: ratten får motkraft från framdäcken (lättare när de tappar greppet), gupp, krockar och vibration på gräs.
+      Det kräver att spelet startas via "Starta spelet.bat", som skickar krafterna till ratten. Justera under Inställningar → Force feedback.
+      Stäng av "Fjädereffekt/autocentrering" i Thrustmaster Control Panel, så att spelet styr centreringen.</p>
     <div class="row"><span style="flex:1"></span><button class="btn" data-back>Tillbaka</button></div>
   </div>
 </div>
@@ -171,12 +175,7 @@
   </div>
   <div id="hud-flags"></div>
   <canvas id="minimap" width="720" height="184"></canvas>
-  <div id="hud-right">
-    <div id="hud-gear">N</div>
-    <div id="hud-speed">0</div><small>km/h</small>
-    <div id="hud-rpmwrap"><div id="hud-rpmbar"></div></div>
-    <div id="hud-rpm">0</div>
-  </div>
+  <canvas id="hud-tacho"></canvas>
   <div id="pedals">
     <div class="p"><i id="p-clutch"></i></div>
     <div class="p"><i id="p-brake"></i></div>
@@ -185,8 +184,9 @@
   </div>
 </div>
 <div id="toast"></div>
+<div id="countdown" class="hidden"></div>
 <div id="finish" class="hidden">
-  <div>MÅL – Passo dello Stelvio</div>
+  <div id="finish-title">MÅL</div>
   <div id="finish-time"></div>
   <div id="finish-best"></div>
 </div>

@@ -6,13 +6,83 @@ import { CarPhysics, ELISE } from './car-physics.js';
 import { buildCarModel, LEVER_POS } from './car-model.js';
 import { loadCarModel } from './car-gltf.js';
 import { MotionOutput } from './motion.js';
+import { ForceFeedback } from './ffb.js';
 import { Input, Calibrator, DEFAULT_SETTINGS } from './input.js';
 import { CarAudio } from './audio.js';
+import { Tachometer } from './tacho.js';
 
 const $ = id => document.getElementById(id);
-const TRACK = 'assets/alpine_pass/';
+const tacho = new Tachometer($('hud-tacho'));
 const TEST = new URLSearchParams(location.search).has('autotest');
-const BEST_KEY = 'lotus.best.v1';
+
+// Banor (Assetto Corsa-format). Filer:
+//   visual:  syns i spelet. phys 'named' = fysikytor enligt AC:s namnregel (1ROAD, 1GRASS, 1WALL …) i samma fil,
+//            terrain = övrig synlig mark blir gräs (för banor där fysikfilen saknar terräng)
+//   phys 'all': separat fysikfil där alla meshar är ytor;  markers: AC_START_0, AC_AB_START_L/R, AC_AB_FINISH_L/R
+// Mittlinjen läses från ai/fast_lane.ai (skapas med tools/make-ai.ps1 om banan saknar en).
+const TRACKS = {
+  alpine_pass: {
+    name: 'Stelviopasset', short: 'STELVIO', dir: 'assets/tracks/alpine_pass/', bestKey: 'lotus.best.v1',
+    desc: 'Backklättring uppför alpvägarna mot Passo dello Stelvio – drygt 6 km och 500 höjdmeter.',
+    finish: 'MÅL – Passo dello Stelvio',
+    files: [
+      { f: 'alpine_pass.kn5', label: 'Stelviopasset (3D-modell)', visual: true, terrain: true },
+      { f: 'physical1.kn5', label: 'Vägyta och räcken', phys: 'all' },
+      { f: 'hillclimb.kn5', label: 'Start och mål', markers: true },
+    ],
+    map: { w: 2130, h: 544, xo: 364.845275878906, zo: 437.728363037109, scale: 1 },
+  },
+  bg_kakami: {
+    name: 'Kakamigahara Park Way', short: 'KAKAMIGAHARA', dir: 'assets/tracks/bg_kakami/', bestKey: 'lotus.best.bg_kakami',
+    desc: 'Smal och kurvig touge-väg i Gifu, Japan – 700 m och 60 höjdmeter med hårnålar. Bana av Nihon Drift Project.',
+    finish: 'MÅL – Kakamigahara',
+    light: 1.45, // skogsbanans material är mörkare än Stelvios
+    files: [
+      { f: 'kakami.kn5', label: 'Kakamigahara (3D-modell)', visual: true, phys: 'named' },
+      { f: 'tree.kn5', label: 'Träd', visual: true },
+      { f: 'gr_coll.kn5', label: 'Räcken', phys: 'named' },
+      { f: 'uhpits.kn5', label: 'Start och mål', markers: true },
+    ],
+    map: { w: 687, h: 511, xo: 286.574890136719, zo: 285.85205078125, scale: 1 },
+  },
+  // Rundbanor (circuit: true): start/mål = AC_TIME_0_L/R, bilen startar i AC_START_0 (pole position).
+  // Filerna följer models_layout_*.ini; ai/ och map.png ligger i layoutens mapp.
+  nurburgring_gp: {
+    name: 'Nürburgring – GP', short: 'NÜRBURGRING GP', dir: 'assets/tracks/ks_nurburgring/', layout: 'layout_gp_a/',
+    bestKey: 'lotus.best.nurburgring_gp', circuit: true, detailWorld: true,
+    desc: 'Grand Prix-banan vid Nürburg i Eifel – 5,1 km runt med Mercedes-Arena och den snabba Dunlop-kurvan. Kör ett flygande varv; varje passage av mållinjen ger en varvtid.',
+    finish: 'VARVTID – Nürburgring GP',
+    files: nurburgFiles(['7', '1', 'ks_nurburgring', '4', '2', '8', '9', '100']),
+    map: { w: 600.604, h: 1565.46, xo: 422.16, zo: 1034.46, scale: 1.2 },
+  },
+  nurburgring_sprint: {
+    name: 'Nürburgring – Sprint', short: 'NÜRBURGRING SPRINT', dir: 'assets/tracks/ks_nurburgring/', layout: 'layout_sprint_a/',
+    bestKey: 'lotus.best.nurburgring_sprint', circuit: true, detailWorld: true,
+    desc: 'Nürburgrings sprintslinga – 3,6 km utan Mercedes-Arena. Kör ett flygande varv; varje passage av mållinjen ger en varvtid.',
+    finish: 'VARVTID – Nürburgring Sprint',
+    files: nurburgFiles(['7', 'ks_nurburgring', '5', '2', '1', '8', '9', '100']),
+    map: { w: 480.136, h: 1269.94, xo: 422.243, zo: 1034.87, scale: 1 },
+  },
+};
+function nurburgFiles(names) {
+  const label = { ks_nurburgring: 'Nürburgring (3D-modell och ytor)', 7: 'Vägbana', 8: 'Detaljer', 100: 'Bro' };
+  return names.map(n => ({
+    f: n + '.kn5', label: label[n] || 'Banobjekt ' + n, visual: true, phys: 'named',
+    markers: n === 'ks_nurburgring',
+    // från models_layout_*.ini: POSITION=-8.5,68.9,-696.7  ROTATION=180,0,0
+    ...(n === '100' ? { pos: [-8.5, 68.9, -696.7], rot: [180, 0, 0] } : {}),
+  }));
+}
+const TRACK_ID = (() => {
+  const q = new URLSearchParams(location.search).get('track');
+  if (q && TRACKS[q]) return q;
+  try { const s = JSON.parse(localStorage.getItem('lotus.settings.v1') || '{}').track; if (TRACKS[s]) return s; } catch { /* */ }
+  return 'alpine_pass';
+})();
+const TRK = TRACKS[TRACK_ID];
+const TRACK = TRK.dir;
+const LAYOUT = TRACK + (TRK.layout || ''); // ai/ och map.png (egen mapp per layout på banor med flera layouter)
+const BEST_KEY = TRK.bestKey;
 const WHEEL_LOCK_DEG = 450; // rattutslag åt ena hållet i bilen (900° lock-to-lock)
 
 // Spelet arbetar i "gammarymd" som AC – inga sRGB-omvandlingar.
@@ -60,6 +130,7 @@ const sun = new THREE.DirectionalLight(0xfff1dc, 2.4);
 const pitch = THREE.MathUtils.degToRad(35), heading = THREE.MathUtils.degToRad(45);
 const SUN_DIR = new THREE.Vector3(-Math.sin(heading) * Math.cos(pitch), Math.sin(pitch), Math.cos(heading) * Math.cos(pitch)).normalize();
 sky.material.uniforms.sunDir.value.copy(SUN_DIR);
+if (TRK.light) { hemi.intensity *= TRK.light; sun.intensity *= TRK.light; }
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 const SH = 45;
@@ -91,10 +162,8 @@ addEventListener('resize', () => { renderer.setSize(innerWidth, innerHeight); ca
 // ---------------------------------------------------------------------------
 // Laddning
 const files = [
-  { url: TRACK + 'alpine_pass.kn5', label: 'Stelviopasset (3D-modell)' },
-  { url: TRACK + 'physical1.kn5', label: 'Vägyta och räcken' },
-  { url: TRACK + 'hillclimb.kn5', label: 'Start och mål' },
-  { url: TRACK + 'ai/fast_lane.ai', label: 'Ideallinje' },
+  ...TRK.files.map(x => ({ url: TRACK + x.f, label: x.label })),
+  { url: LAYOUT + 'ai/fast_lane.ai', label: 'Ideallinje' },
 ];
 let loadedBytes = 0, totalBytes = 0;
 function setProgress(text, frac) {
@@ -133,58 +202,100 @@ const input = new Input();
 const S = input.settings;
 const audio = new CarAudio();
 const motion = new MotionOutput(S, log);
-addEventListener('beforeunload', () => { motion.disconnect(); });
+const ffb = new ForceFeedback(S, log);
+addEventListener('beforeunload', () => { motion.disconnect(); ffb.stop(); });
 let world, spline, car, model, startInfo;
 let startIdx = 0, finishIdx = 0;
 
 async function loadWorld() {
-  const [visBuf, physBuf, hcBuf, aiBuf] = await fetchAll();
+  const bufs = await fetchAll();
+  const aiBuf = bufs.pop();
 
-  setProgress('Avkodar banan och texturer…', 0.82); await nextFrame();
-  const visKn5 = parseKN5(visBuf);
-  const vis = await buildKN5(visKn5, renderer);
-  for (const m of vis.materials) m.fog = true;
-  scene.add(vis.root);
-
-  setProgress('Bygger kollisionsvärld…', 0.9); await nextFrame();
-  const phys = await buildKN5(parseKN5(physBuf), renderer, { visual: false });
-  const hc = await buildKN5(parseKN5(hcBuf), renderer, { visual: false });
   world = new CollisionWorld();
-  let nRoad = 0, nWall = 0, nTerrain = 0;
-  for (const m of phys.meshes) {
-    const n = m.name.toUpperCase();
-    if (n.includes('WALL')) { world.addMesh(m, SURF_WALL); nWall++; }
-    else if (n.includes('GRASS') || n.includes('SAND') || n.includes('KERB') === false && n.includes('ROAD') === false) { world.addMesh(m, SURF_GRASS); }
-    else { world.addMesh(m, SURF_ROAD); nRoad++; }
+  let nRoad = 0, nWall = 0, nGrass = 0, nTerrain = 0;
+  const addPhys = (m, surf) => { world.addMesh(m, surf); if (surf === SURF_WALL) nWall++; else if (surf === SURF_ROAD) nRoad++; else nGrass++; };
+  const markerRoots = [];
+  for (let k = 0; k < TRK.files.length; k++) {
+    const spec = TRK.files[k];
+    setProgress(`Avkodar ${spec.label.toLowerCase()}…`, 0.8 + 0.15 * k / TRK.files.length); await nextFrame();
+    const built = await buildKN5(parseKN5(bufs[k]), renderer, { visual: !!spec.visual, detailWorld: !!TRK.detailWorld });
+    bufs[k] = null;
+    if (spec.pos || spec.rot) {
+      // placering från models.ini (AC-koordinater: X speglas, rotationen runt Y byter tecken)
+      const [px, py, pz] = spec.pos || [0, 0, 0];
+      built.root.position.set(-px, py, pz);
+      built.root.rotation.y = -THREE.MathUtils.degToRad((spec.rot || [0])[0]);
+      built.root.updateMatrixWorld(true);
+    }
+    if (spec.visual) {
+      for (const m of built.materials) m.fog = true;
+      scene.add(built.root);
+    }
+    if (spec.markers) markerRoots.push(built.root);
+    if (spec.phys === 'all') {
+      // separat fysikfil: allt som inte är räcke eller väg räknas som gräs/terräng
+      for (const m of built.meshes) {
+        const n = m.name.toUpperCase();
+        if (n.startsWith('AC_')) continue;
+        if (n.includes('WALL')) addPhys(m, SURF_WALL);
+        else if (n.includes('GRASS') || n.includes('SAND') || n.includes('KERB') === false && n.includes('ROAD') === false) addPhys(m, SURF_GRASS);
+        else addPhys(m, SURF_ROAD);
+      }
+    } else if (spec.phys === 'named') {
+      for (const m of built.meshes) { const s = namedSurface(m); if (s !== null) addPhys(m, s); }
+    }
+    if (spec.terrain) {
+      // Visuell terräng (berg, slänter) som mark utanför vägen – genomskinliga dekaler hoppas över.
+      for (const m of built.meshes) {
+        const def = m.userData.matDef;
+        if (!def || def.blend === 1) continue;
+        if (/asphalt|line|razmetka|road/i.test(def.name)) continue;
+        world.addMesh(m, SURF_GRASS, { minNy: 0.6, steepWallNy: 0.5 }); nTerrain++;
+      }
+    }
   }
-  // Visuell terräng (berg, slänter) som mark utanför vägen – genomskinliga dekaler hoppas över.
-  for (const m of vis.meshes) {
-    const def = m.userData.matDef;
-    if (!def || def.blend === 1) continue;
-    if (/asphalt|line|razmetka|road/i.test(def.name)) continue;
-    world.addMesh(m, SURF_GRASS, { minNy: 0.6, steepWallNy: 0.5 }); nTerrain++;
-  }
+  setProgress('Bygger kollisionsvärld…', 0.95); await nextFrame();
   world.finalize();
-  log(`kollision: väg ${nRoad}, räcken ${nWall}, terräng ${nTerrain} meshar, ${world.surf.length} trianglar`);
+  log(`bana ${TRACK_ID}: väg ${nRoad}, gräs ${nGrass}, räcken ${nWall}, terräng ${nTerrain} meshar, ${world.surf.length} trianglar`);
 
   spline = parseAI(aiBuf);
 
-  // start/mål från hillclimb.kn5
+  // start/mål: AC_-markörer (meshar eller tomma noder)
   const centre = name => {
-    const m = hc.meshes.find(x => x.name === name); if (!m) return null;
-    m.geometry.computeBoundingBox();
-    return m.geometry.boundingBox.getCenter(new THREE.Vector3()).applyMatrix4(m.matrixWorld);
+    for (const r of markerRoots) {
+      const o = r.getObjectByName(name); if (!o) continue;
+      if (o.isMesh) { o.geometry.computeBoundingBox(); return o.geometry.boundingBox.getCenter(new THREE.Vector3()).applyMatrix4(o.matrixWorld); }
+      return o.getWorldPosition(new THREE.Vector3());
+    }
+    return null;
   };
   const st = centre('AC_START_0') || spline.point(5);
   const gate = (a, b) => { const p = centre(a), q = centre(b); return p && q ? p.add(q).multiplyScalar(0.5) : null; };
-  const sGate = gate('AC_AB_START_L', 'AC_AB_START_R');
-  const fGate = gate('AC_AB_FINISH_L', 'AC_AB_FINISH_R');
-  const si = spline.nearest(st.x, st.z, -1, st.y);
-  startIdx = sGate ? spline.nearest(sGate.x, sGate.z, -1, sGate.y) : si + 10;
-  finishIdx = fGate ? spline.nearest(fGate.x, fGate.z, -1, fGate.y) : spline.n - 5;
-  if (finishIdx <= startIdx) finishIdx = spline.n - 5;
-  startInfo = { pos: st, idx: si };
-  log(`spline n=${spline.n} längd=${spline.length.toFixed(0)} m, start idx ${si}, startlinje ${startIdx}, mål ${finishIdx}`);
+  if (TRK.circuit) {
+    // Rundbana: rulla ut slingan från ~40 m bakom startplatsen, ett varv + marginal.
+    // Mållinjen ligger då både vid startIdx och startIdx + n; vid målgång flyttas index ett varv bakåt.
+    const n = spline.n;
+    const line = gate('AC_TIME_0_L', 'AC_TIME_0_R') || st;
+    const si0 = spline.nearest(st.x, st.z, -1, st.y), li0 = spline.nearest(line.x, line.z, -1, line.y);
+    let begin = si0, back = 0;
+    while (back < 40) { const a = (begin - 1 + n) % n; back += spline.point(a).distanceTo(spline.point(begin)); begin = a; }
+    const toLine = ((li0 - begin) % n + n) % n;
+    spline = spline.unrolled(begin, toLine + n + 400);
+    const si = ((si0 - begin) % n + n) % n;
+    startIdx = toLine; finishIdx = toLine + n;
+    startInfo = { pos: st, idx: si };
+    log(`rundbana: varv ${n} punkter, ${(spline.dist[finishIdx] - spline.dist[startIdx]).toFixed(0)} m, start idx ${si}, mållinje ${startIdx}/${finishIdx}`);
+  } else {
+    // A–B-bana: AC_AB_START/FINISH-grindar
+    const sGate = gate('AC_AB_START_L', 'AC_AB_START_R');
+    const fGate = gate('AC_AB_FINISH_L', 'AC_AB_FINISH_R');
+    const si = spline.nearest(st.x, st.z, -1, st.y);
+    startIdx = sGate ? spline.nearest(sGate.x, sGate.z, -1, sGate.y) : si + 10;
+    finishIdx = fGate ? spline.nearest(fGate.x, fGate.z, -1, fGate.y) : spline.n - 5;
+    if (finishIdx <= startIdx) finishIdx = spline.n - 5;
+    startInfo = { pos: st, idx: si };
+    log(`spline n=${spline.n} längd=${spline.length.toFixed(0)} m, start idx ${si}, startlinje ${startIdx}, mål ${finishIdx}`);
+  }
 
   // bil
   car = new CarPhysics(world);
@@ -205,11 +316,29 @@ async function loadWorld() {
     model.root.add(cabin);
   }
   applySettings();
-  placeAtIndex(si, st);
+  placeAtIndex(startInfo.idx, st);
 
   // minikarta
   setupMinimap();
   setProgress('Klar', 1);
+}
+
+// AC:s namnregel för fysikytor: siffra + ytans nyckel, t.ex. "1ROAD.003", "01WALL11", "1GRASS.012".
+function namedSurface(m) {
+  // nyckeln kan innehålla bindestreck (Kunos: "1ASPH-NURB", "1GRS-CUT-B")
+  const k = /^\d+([A-Z][A-Z-]*)/i.exec(m.name);
+  if (!k) return null;
+  const full = k[1].toUpperCase().replace(/-+$/, ''), base = full.split('-')[0];
+  const mat = m.userData.matDef ? m.userData.matDef.name : '';
+  if (/marker/i.test(mat)) return null; // reflexstolpar/kantmarkeringar: inte körbara
+  const ROAD = ['ROAD', 'SPROAD', 'PITS', 'PIT', 'KERB', 'ASPHALT', 'ASPH-NURB', 'CURB', 'CUTKRB', 'CONCRETE', 'PAINT', 'OUT', 'TRM-CUT-A'];
+  const GRASS = ['GRASS', 'GRAVEL', 'SAND', 'DIRT', 'GRS-CUT-B', 'CARPET'];
+  for (const key of [full, base]) { // hela nyckeln först, sedan delen före bindestrecket ("1ROAD-LEFT")
+    if (key === 'WALL') return SURF_WALL;
+    if (ROAD.includes(key)) return SURF_ROAD;
+    if (GRASS.includes(key)) return SURF_GRASS;
+  }
+  return null; // t.ex. WATER
 }
 
 function placeAtIndex(i, exact) {
@@ -250,6 +379,8 @@ function applySettings() {
   car.settings.requireClutch = S.requireClutch;
   car.settings.absAssist = S.abs;
   car.settings.tcAssist = S.tc;
+  car.settings.grip = (S.tyreGrip || 100) / 100;
+  car.settings.gripBalance = (S.gripBalance || 0) / 100;
   model.setColor(S.color);
   audio.setVolume(S.volume);
   camera.fov = S.fov; camera.updateProjectionMatrix();
@@ -258,10 +389,14 @@ function applySettings() {
 
 // ---------------------------------------------------------------------------
 // Minikarta (map.png + data/map.ini)
-const MAP = { w: 2130, h: 544, xo: 364.845275878906, zo: 437.728363037109, scale: 1 };
+const MAP = TRK.map;
 let mapImg = null;
 function setupMinimap() {
-  mapImg = new Image(); mapImg.src = TRACK + 'map.png';
+  mapImg = new Image(); mapImg.src = LAYOUT + 'map.png';
+  // kartans proportioner: högst 360 × 160 px på skärmen
+  const k = Math.min(360 / MAP.w, 160 / MAP.h);
+  const c = $('minimap'), w = Math.round(MAP.w * k), h = Math.round(MAP.h * k);
+  c.style.width = w + 'px'; c.style.height = h + 'px'; c.width = w * 2; c.height = h * 2;
 }
 function drawMinimap() {
   const c = $('minimap'), ctx = c.getContext('2d');
@@ -392,7 +527,7 @@ function updateCamera(dt, st) {
 // ---------------------------------------------------------------------------
 // Tidtagning
 let progressIdx = 0, timerState = 'ready', timeStart = 0, raceTime = 0, lastIdx = 0;
-let best = +localStorage.getItem(BEST_KEY) || 0;
+let best = +localStorage.getItem(BEST_KEY) || 0, finishTimer = 0;
 function updateTiming(dt) {
   const i = spline.nearest(car.pos.x, car.pos.z, progressIdx, car.pos.y);
   lastIdx = progressIdx; progressIdx = i;
@@ -406,7 +541,13 @@ function updateTiming(dt) {
       $('finish-time').textContent = fmtTime(raceTime);
       $('finish-best').textContent = newBest ? 'Nytt personbästa!' : 'Personbästa: ' + fmtTime(best);
       $('finish').classList.remove('hidden');
-      setTimeout(() => $('finish').classList.add('hidden'), 9000);
+      clearTimeout(finishTimer); finishTimer = setTimeout(() => $('finish').classList.add('hidden'), TRK.circuit ? 5000 : 9000);
+      if (TRK.circuit) {
+        // nästa varv: samma plats ligger ett varv tidigare i den utrullade mittlinjen
+        const n = spline.lapPoints;
+        progressIdx -= n; lastIdx -= n; if (lastGoodIdx >= n) lastGoodIdx -= n;
+        timerState = 'running'; raceTime = 0;
+      }
     }
   }
 }
@@ -426,13 +567,10 @@ function updateHud(dt, st) {
   hudT += dt; dashT += dt;
   const kmh = car.speed * 3.6;
   if (dashT > 0.05 && model.dashTex) { dashT = 0; model.dashTex.draw(car.rpm, Math.abs(car.speedSigned) * 3.6, car.gearLabel, car.rpm > 7900); }
+  // stor varvräknare: ritas varje bildruta för mjuk nål, syns i alla kameravyer
+  const gear = S.gearbox === 'auto' && car.gear >= 2 ? 'D' + car.gearLabel : car.gearLabel;
+  tacho.draw(car.rpm, kmh, gear, timerState === 'ready' ? '--:--' : fmtTime(raceTime).slice(0, -1));
   if (hudT < 0.05) return; hudT = 0;
-  $('hud-speed').textContent = Math.round(kmh);
-  $('hud-gear').textContent = S.gearbox === 'auto' && car.gear >= 2 ? 'D' + car.gearLabel : car.gearLabel;
-  $('hud-rpm').textContent = Math.round(car.rpm / 10) * 10;
-  const rp = Math.min(1, car.rpm / 9000);
-  const bar = $('hud-rpmbar'); bar.style.width = (rp * 100) + '%';
-  bar.className = car.rpm > 8000 ? 'red' : car.rpm > 6200 ? 'vvtl' : '';
   $('hud-time').textContent = timerState === 'ready' ? 'Kör till startlinjen' : fmtTime(raceTime);
   $('hud-best').textContent = best ? 'Bästa ' + fmtTime(best) : '';
   const prog = THREE.MathUtils.clamp((progressIdx - startIdx) / (finishIdx - startIdx), 0, 1);
@@ -441,7 +579,7 @@ function updateHud(dt, st) {
   $('hud-dist').textContent = (toGo / 1000).toFixed(2) + ' km till målet';
   const pedal = (id, v) => { $(id).style.height = (v * 100) + '%'; };
   pedal('p-clutch', st.clutch); pedal('p-brake', st.brake); pedal('p-thr', st.throttle);
-  $('p-steer').style.transform = `rotate(${car.input.steer * WHEEL_LOCK_DEG}deg)`;
+  $('p-steer').style.transform = `rotate(${car.input.steer * WHEEL_LOCK_DEG / steerGain()}deg)`;
   const flags = [];
   if (car.stalled) flags.push('<span class="warn">MOTORSTOPP – tryck I (starta) eller koppling + friläge</span>');
   if (car.grind > 0) flags.push('<span class="warn">GRRR – trampa ur kopplingen!</span>');
@@ -450,7 +588,8 @@ function updateHud(dt, st) {
   if (S.abs) flags.push('<span class="dim">ABS</span>'); if (S.tc) flags.push('<span class="dim">TC</span>');
   $('hud-flags').innerHTML = flags.join(' ');
   $('hud-device').textContent = (st.device === 'Tangentbord' || st.device === 'Handkontroll' ? st.device : 'Ratt: ' + short(st.device))
-    + (motion.connected ? `  ·  Rörelse A ${Math.round(motion.outA)} B ${Math.round(motion.outB)}` : '');
+    + (motion.connected ? `  ·  Rörelse A ${Math.round(motion.outA)} B ${Math.round(motion.outB)}` : '')
+    + (ffb.connected && S.ffbEnabled ? '  ·  FFB' : '');
   drawMinimap();
 }
 function short(s) { return s.length > 40 ? s.slice(0, 38) + '…' : s; }
@@ -460,7 +599,8 @@ function short(s) { return s.length > 40 ? s.slice(0, 38) + '…' : s; }
 function updateModel(st) {
   model.root.position.copy(car.pos);
   model.root.quaternion.copy(car.quat);
-  const steerRad = car.input.steer * THREE.MathUtils.degToRad(WHEEL_LOCK_DEG);
+  // bilens ratt följer din fysiska ratt; styrkänsligheten ändrar bara hjulens utslag
+  const steerRad = car.input.steer * THREE.MathUtils.degToRad(WHEEL_LOCK_DEG / steerGain());
   if (model.setWheels) { // glTF-modellen
     model.setWheels(car.wheels);
     model.setSteer(steerRad);
@@ -482,12 +622,14 @@ function updateModel(st) {
 
 // ---------------------------------------------------------------------------
 // Inmatning -> bil
+// Styrkänslighet: snabbare styrväxel för ratt. 900 = 1:1, 1800 = dubbelt så mycket hjulutslag per rattgrad.
+function steerGain() { return input.bindings.steer ? (S.steerSensitivity || 900) / 900 : 1; }
 let prevHGear = null;
 function applyInput(st, dt) {
   const inp = car.input;
   // ratt: kalibrerad axel ±1 motsvarar ±(rotation/2) grader; bilens ratt har ±450°
   let steer = st.steer;
-  if (input.bindings.steer) steer = THREE.MathUtils.clamp(steer * (S.wheelRotation / 2) / WHEEL_LOCK_DEG, -1, 1);
+  if (input.bindings.steer) steer = THREE.MathUtils.clamp(steer * (S.wheelRotation / 2) * steerGain() / WHEEL_LOCK_DEG, -1, 1);
   else {
     // tangentbord/handkontroll: hastighetsberoende styrning
     const v = car.speed;
@@ -532,15 +674,38 @@ function ignition() {
 let paused = true, started = false;
 function show(id) { for (const p of document.querySelectorAll('.panel')) p.classList.toggle('hidden', p.id !== id); $('menu').classList.toggle('hidden', !id); }
 function togglePause() {
-  if (!started) return;
+  if (!started || countdown > 0) return;
   paused = !paused;
   if (paused) { show('pause'); audio.suspend(); } else { show(null); audio.resume(); }
 }
+// Nedräkning innan start: bilen står still tills siffran når noll
+const COUNTDOWN_S = 10;
+let countdown = 0, countdownShown = -1, goTimer = 0;
+function setCountdownText(text, go) {
+  const el = $('countdown');
+  el.textContent = text;
+  el.classList.toggle('go', !!go);
+  el.classList.remove('hidden', 'pop'); void el.offsetWidth; el.classList.add('pop');
+}
+function updateCountdown(dt) {
+  countdown -= dt;
+  if (countdown > 0) {
+    const n = Math.ceil(countdown);
+    if (n !== countdownShown) { countdownShown = n; setCountdownText(n); }
+    return;
+  }
+  countdown = 0; paused = false; acc = 0;
+  setCountdownText('KÖR!', true);
+  clearTimeout(goTimer); goTimer = setTimeout(() => $('countdown').classList.add('hidden'), 900);
+}
 function startGame() {
-  started = true; paused = false; show(null);
+  started = true; show(null);
   audio.start(S.volume); audio.resume();
   $('hud').classList.remove('hidden');
   last = performance.now();
+  if (TEST) { paused = false; return; }
+  paused = true; countdown = COUNTDOWN_S; countdownShown = -1;
+  updateCountdown(0);
 }
 
 function buildSettings() {
@@ -554,7 +719,10 @@ function buildSettings() {
     row('Automatisk koppling', chk('autoClutch')),
     row('Kräv koppling vid växling', chk('requireClutch')),
     row('Rattens rotation (grader)', num('wheelRotation', 270, 1080, 10)),
+    row('Styrkänslighet (900 = 1:1, högre = mer sväng)', num('steerSensitivity', 300, 2000, 10)),
     row('Styrkurva (1 = linjär)', num('steerLinearity', 0.6, 2, 0.05)),
+    row('Däckgrepp / väghållning (%, 100 = standard)', num('tyreGrip', 50, 200, 5)),
+    row('Greppbalans fram/bak (%, + = mer grepp fram → överstyr, − = mer bak → understyr)', num('gripBalance', -30, 30, 1)),
     row('ABS', chk('abs')),
     row('Antispinn (TC)', chk('tc')),
     row('Synfält yttre kameror (FOV)', num('fov', 40, 95, 1)),
@@ -573,10 +741,24 @@ function buildSettings() {
     row('Titta in mot kurvan', chk('lookApex')),
     row('Lackfärg', `<input type="color" data-k="color" value="${S.color}">
       <span class="swatches">${['#0f4a2a', '#f2c200', '#c8102e', '#1b3f8b', '#e9e9e9', '#111111', '#ff6a13'].map(c => `<i data-c="${c}" style="background:${c}"></i>`).join('')}</span>`),
+    '<h3 class="shead">Force feedback (rattens motkraft)</h3>',
+    `<div class="mrow"><button class="btn ghost" id="f-test" type="button">Testa kraften</button>
+      <span id="f-status" class="dim">${ffb.status}</span></div>`,
+    '<div class="mlive"><div>Kraft <span class="bar fbar"><i id="f-bar"></i></span> <span class="dim">rött = klipper, sänk styrkan</span></div></div>',
+    row('Force feedback på', chk('ffbEnabled')),
+    row('Styrka', num('ffbGain', 0, 1.5, 0.05)),
+    row('Dämpning (tyngd)', num('ffbDamper', 0, 1, 0.05)),
+    row('Vägkänsla (gupp, gräs, krockar)', num('ffbRoad', 0, 1.5, 0.05)),
+    row('Minsta kraft (svaga rattar)', num('ffbMinForce', 0, 0.2, 0.01)),
+    row('Vänd kraftriktning', chk('ffbInvert')),
     '<h3 class="shead">Rörelsesimulator (Arduino SMC3 via USB)</h3>',
     `<div class="mrow"><button class="btn ghost" id="m-connect" type="button">${motion.connected ? 'Koppla från' : 'Anslut Arduino…'}</button>
-      <button class="btn ghost" id="m-test" type="button">Teströrelse</button>
       <span id="m-status" class="dim">${motion.status}</span></div>`,
+    `<div class="mrow">
+      <button class="btn ghost m-test" data-t="brake" type="button">Inbromsning</button>
+      <button class="btn ghost m-test" data-t="accel" type="button">Acceleration</button>
+      <button class="btn ghost m-test" data-t="left" type="button">Vänstersväng</button>
+      <button class="btn ghost m-test" data-t="right" type="button">Högersväng</button></div>`,
     '<div id="m-live" class="mlive"><div>A <span class="bar"><i id="m-a"></i></span> <b id="m-av">512</b></div><div>B <span class="bar"><i id="m-b"></i></span> <b id="m-bv">512</b></div></div>',
     row('Skicka rörelser', chk('motionEnabled')),
     row('Motorer', sel('motionMode', [['axes', 'A = gas/broms, B = vänster/höger'], ['mix', 'Tvåmotorsstol (A vänster, B höger motor)']])),
@@ -586,15 +768,19 @@ function buildSettings() {
     row('Backar och vägens lutning', chk('motionSlopes')),
     row('Vänd gas/broms', chk('motionInvertLong')),
     row('Vänd vänster/höger', chk('motionInvertLat')),
+    row('Vänd motor B', chk('motionInvertB')),
     row('Överföringshastighet (baud)', sel('motionBaud', [['500000', '500000 (SMC3 standard)'], ['115200', '115200']])),
   ].join('');
   $('m-connect').onclick = async () => {
     if (motion.connected) await motion.disconnect(); else await motion.choosePort();
     $('m-connect').textContent = motion.connected ? 'Koppla från' : 'Anslut Arduino…';
   };
-  $('m-test').onclick = () => { motion.startTest(); toast('Teströrelse: gas/broms, sedan vänster/höger'); };
+  const testBtns = f.querySelectorAll('.m-test');
+  testBtns.forEach(b => b.onclick = () => { motion.startTest(b.dataset.t); toast('Teströrelse: ' + b.textContent.toLowerCase() + ', sedan tillbaka till mitten'); });
   motion.onStatus = s => { const el = $('m-status'); if (el) el.textContent = s; const b = $('m-connect'); if (b) b.textContent = motion.connected ? 'Koppla från' : 'Anslut Arduino…'; };
-  if (!motion.supported) { $('m-connect').disabled = true; $('m-test').disabled = true; }
+  if (!motion.supported) { $('m-connect').disabled = true; testBtns.forEach(b => b.disabled = true); }
+  $('f-test').onclick = () => { ffb.startTest(); toast('Test: ratten vrids åt höger, sedan vänster, sedan vibration'); };
+  ffb.onStatus = (state, text) => { const el = $('f-status'); if (el) el.textContent = text; };
   f.querySelectorAll('[data-k]').forEach(el => {
     el.oninput = () => {
       const k = el.dataset.k;
@@ -646,8 +832,24 @@ function openCalibration() {
   });
 }
 
+function setupTrackMenu() {
+  document.title = 'Lotus Elise – ' + TRK.name;
+  for (const el of document.querySelectorAll('.track-short')) el.textContent = TRK.short;
+  $('track-desc').textContent = TRK.desc + ' Elise S2 med 1,8-liters Toyota 2ZZ-GE och sexväxlad manuell låda.';
+  $('finish-title').textContent = TRK.finish;
+  const sel = $('track-select');
+  sel.innerHTML = Object.entries(TRACKS).map(([id, t]) => `<option value="${id}" ${id === TRACK_ID ? 'selected' : ''}>${t.name}</option>`).join('');
+  sel.onchange = () => {
+    S.track = sel.value; input.saveSettings();
+    const u = new URL(location.href); u.searchParams.delete('track');
+    location.href = u.toString(); // laddar om med den nya banan
+  };
+  $('btn-track').onclick = () => { show('main'); sel.focus(); };
+}
+
 function setupMenus() {
-  $('btn-start').onclick = startGame;
+  setupTrackMenu();
+  $('btn-start').onclick = () => { if (started) togglePause(); else startGame(); };
   $('btn-resume').onclick = togglePause;
   $('btn-restart').onclick = () => { restartRun(); togglePause(); };
   $('btn-reset').onclick = () => { lastGoodIdx = progressIdx; resetCar(); togglePause(); };
@@ -678,7 +880,9 @@ function frame(now) {
   let dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (!car) return;
   const st = input.poll(dt);
-  if (paused) {
+  if (countdown > 0) {
+    updateCountdown(dt);
+  } else if (paused) {
     for (const ev of st.events) if (ev === 'pause' && started) togglePause();
     if (TEST) testDrive(st, dt);
   } else {
@@ -701,6 +905,7 @@ function frame(now) {
     // acceleration i bilens koordinater (x vänster, y upp, z fram) över den simulerade tiden
     if (n > 0) car.lastAcc = car.vel.clone().sub(prevVel).divideScalar(n * STEP).applyQuaternion(car.quat.clone().invert());
     if (car.impact > 1.5) { audio.crash(car.impact); }
+    ffb.addImpact(car.impact);
     car.impact = 0;
     updateTiming(dt);
     checkOffTrack();
@@ -709,6 +914,7 @@ function frame(now) {
   updateModel(st);
   updateCamera(dt, st);
   updateMotion(dt);
+  updateFfb(dt, st);
   // skuggkamera följer bilen
   sun.target.position.copy(car.pos);
   sun.position.copy(car.pos).addScaledVector(SUN_DIR, 150);
@@ -743,6 +949,23 @@ function updateMotion(dt) {
     const pct = v => Math.max(0, Math.min(100, v / 1023 * 100)) + '%';
     ea.style.width = pct(motion.outA); $('m-b').style.width = pct(motion.outB);
     $('m-av').textContent = Math.round(motion.outA); $('m-bv').textContent = Math.round(motion.outB);
+  }
+}
+
+// Force feedback: rattens motkraft beräknas ur däckkrafterna
+function updateFfb(dt, st) {
+  const B = input.bindings.steer;
+  ffb.setDevice(B && B.dev);
+  const active = started && !paused && document.hasFocus();
+  const steerDeg = B ? st.steer * S.wheelRotation / 2 : null;
+  // ändstoppet hamnar där bilens fulla rattutslag nås med vald styrkänslighet
+  ffb.update(dt, car, active, steerDeg, WHEEL_LOCK_DEG / steerGain());
+  const bar = $('f-bar');
+  if (bar && !$('settings').classList.contains('hidden')) {
+    const f = ffb.force;
+    bar.style.left = (50 + Math.min(0, f) * 50) + '%';
+    bar.style.width = (Math.abs(f) * 50) + '%';
+    bar.style.background = ffb.clip > 0.5 ? '#ff4d4d' : '';
   }
 }
 
@@ -791,7 +1014,7 @@ function testDrive(st, dt) {
   if (car.gear === 1 && testT > 0.8) car.requestGear(1);
   if (car.rpm > 7800 && car.gear < 5) car.shiftUp();
   if (car.rpm < 3000 && car.gear > 2) car.shiftDown();
-  if (Math.floor(testT / 3) !== Math.floor((testT - dt) / 3) && testT > 12) log(`A=${Math.round(motion.outA)} B=${Math.round(motion.outB)} t=${testT.toFixed(1)} v=${(car.speed * 3.6).toFixed(0)} g=${car.gearLabel} rpm=${car.rpm.toFixed(0)} idx=${progressIdx} y=${car.pos.y.toFixed(2)} c=${car.contacts} steer=${car.input.steer.toFixed(2)} slide=${(car.slide || 0).toFixed(2)}`);
+  if (Math.floor(testT / 3) !== Math.floor((testT - dt) / 3) && testT > 12) log(`A=${Math.round(motion.outA)} B=${Math.round(motion.outB)} t=${testT.toFixed(1)} v=${(car.speed * 3.6).toFixed(0)} g=${car.gearLabel} rpm=${car.rpm.toFixed(0)} idx=${progressIdx} y=${car.pos.y.toFixed(2)} c=${car.contacts} steer=${car.input.steer.toFixed(2)} slide=${(car.slide || 0).toFixed(2)} ffb=${ffb.force.toFixed(2)}`);
   const shotsAt = [3, 9, 15, 45];
   if (testShots < shotsAt.length && testT > shotsAt[testShots]) {
     testShots++;
@@ -809,6 +1032,7 @@ async function main() {
   setupMenus();
   try {
     motion.autoConnect().catch(() => {});
+    if (!TEST) ffb.connect(); // autotest kör bilen själv – rör inte den riktiga ratten
     await loadWorld();
   } catch (e) {
     log('Laddningsfel: ' + (e.stack || e));

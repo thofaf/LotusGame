@@ -1,4 +1,4 @@
-// Syntetiserat ljud: 4-cyl motor (Toyota 2ZZ-GE), insug, däckskrik, vind, växelskrap, krockar.
+// Syntetiserat ljud: 4-cyl motor (Toyota 2ZZ-GE, tändpulser i engine-worklet.js), insug, däckskrik, vind, växelskrap, krockar.
 export class CarAudio {
   constructor() { this.ctx = null; this.enabled = false; }
 
@@ -20,32 +20,37 @@ export class CarAudio {
     const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
     const noise = () => { const n = ctx.createBufferSource(); n.buffer = noiseBuf; n.loop = true; n.start(); return n; };
 
-    // motor: grundton (tändfrekvens), övertoner och "knatter"
-    const engFilter = this.engFilter = ctx.createBiquadFilter(); engFilter.type = 'lowpass'; engFilter.Q.value = 1.2;
-    const shaper = ctx.createWaveShaper();
-    const curve = new Float32Array(1024); for (let i = 0; i < 1024; i++) { const x = i / 512 - 1; curve[i] = Math.tanh(x * 2.2); }
-    shaper.curve = curve;
-    const engGain = this.engGain = ctx.createGain(); engGain.gain.value = 0;
-    shaper.connect(engFilter); engFilter.connect(engGain); engGain.connect(bus);
-    const mkOsc = (type, gain) => { const o = ctx.createOscillator(); o.type = type; const g = ctx.createGain(); g.gain.value = gain; o.connect(g); g.connect(shaper); o.start(); return { o, g }; };
-    this.o1 = mkOsc('sawtooth', 0.35);   // tändfrekvens
-    this.o2 = mkOsc('square', 0.18);     // halva (vevaxel) – mullret
-    this.o3 = mkOsc('sawtooth', 0.12);   // 2x
-    this.o4 = mkOsc('triangle', 0.25);   // 1.5x – ojämnhet
-    // VVTL: hårdare ton över 6200 rpm
-    const vv = ctx.createBiquadFilter(); vv.type = 'bandpass'; vv.Q.value = 2.5;
-    const vvGain = this.vvGain = ctx.createGain(); vvGain.gain.value = 0;
-    this.o5 = ctx.createOscillator(); this.o5.type = 'sawtooth'; this.o5.connect(vv); vv.connect(vvGain); vvGain.connect(bus); this.o5.start();
-    this.vvFilter = vv;
-    // insug / avgaser – brus
-    const intake = ctx.createBiquadFilter(); intake.type = 'bandpass'; intake.Q.value = 0.9;
-    const intakeGain = this.intakeGain = ctx.createGain(); intakeGain.gain.value = 0;
-    noise().connect(intake); intake.connect(intakeGain); intakeGain.connect(bus);
-    this.intakeFilter = intake;
-    // amplitudmodulering i takt med tändningarna (ger "puls")
-    const am = this.am = ctx.createOscillator(); am.type = 'sine';
-    const amDepth = this.amDepth = ctx.createGain(); amDepth.gain.value = 0.15;
-    am.connect(amDepth); amDepth.connect(engGain.gain); am.start();
+    // motor: tändpulser från AudioWorklet (engine-worklet.js) -> avgasrör/ljuddämpare resp. insug/luftlåda
+    const f = (type, freq, q = 0.7, gain = 0) => { const b = ctx.createBiquadFilter(); b.type = type; b.frequency.value = freq; b.Q.value = q; b.gain.value = gain; return b; };
+    const chain = (...nodes) => { for (let i = 0; i < nodes.length - 1; i++) nodes[i].connect(nodes[i + 1]); return nodes[nodes.length - 1]; };
+    // avgaser: Elisens korta system med en ljuddämpare – djup grundresonans, rörmoder, dämparen tar diskanten
+    this.exhLP = f('lowpass', 1500, 0.8);
+    const sat = ctx.createWaveShaper(); // lätt mättnad: rasp vid fullgas
+    const curve = new Float32Array(2048); for (let i = 0; i < 2048; i++) { const x = i / 1024 - 1; curve[i] = Math.tanh(x * 1.8) / Math.tanh(1.8); }
+    sat.curve = curve; sat.oversample = '2x';
+    this.exhIn = f('highpass', 32, 0.7);
+    this.exhGain = ctx.createGain(); this.exhGain.gain.value = 0;
+    chain(this.exhIn, f('peaking', 95, 1.1, 6), f('peaking', 290, 2.2, 4), f('peaking', 680, 2.5, 3), f('notch', 1300, 1.5), this.exhLP, sat, this.exhGain).connect(bus);
+    // insug: luftlådan (Helmholtz-resonans) och insugsrör; ljusare och starkare med VVTL-i
+    this.intLP = f('lowpass', 2500, 0.9);
+    this.intRes = f('peaking', 420, 1.6, 7);
+    this.intHorn = f('peaking', 1900, 2.0, 0); // "ylet" över 6200 rpm
+    this.intIn = f('highpass', 70, 0.7);
+    this.intGain = ctx.createGain(); this.intGain.gain.value = 0;
+    chain(this.intIn, this.intRes, this.intHorn, this.intLP, this.intGain).connect(bus);
+    // mekaniskt: ventiler, kamkedja – svagt surr som stiger med varvtalet
+    this.mechF = f('bandpass', 3000, 1.2);
+    this.mechGain = ctx.createGain(); this.mechGain.gain.value = 0;
+    noise().connect(this.mechF); this.mechF.connect(this.mechGain); this.mechGain.connect(bus);
+    this.engine = null;
+    if (ctx.audioWorklet) {
+      ctx.audioWorklet.addModule(new URL('./engine-worklet.js', import.meta.url)).then(() => {
+        const node = new AudioWorkletNode(ctx, 'lotus-engine', { numberOfInputs: 0, numberOfOutputs: 2, outputChannelCount: [1, 1] });
+        node.connect(this.exhIn, 0); node.connect(this.intIn, 1);
+        this.engine = node;
+        this.eng = { rpm: node.parameters.get('rpm'), load: node.parameters.get('load'), on: node.parameters.get('on'), vvtl: node.parameters.get('vvtl') };
+      }).catch(e => console.warn('Motorljudet kunde inte startas', e));
+    }
 
     // däck
     const tyreF = ctx.createBiquadFilter(); tyreF.type = 'bandpass'; tyreF.frequency.value = 1100; tyreF.Q.value = 6;
@@ -108,32 +113,35 @@ export class CarAudio {
     const rpm = Math.max(0, car.rpm);
     if (!Number.isFinite(rpm + car.speed + (car.slide || 0) + car.throttleEff)) return;
     const running = !car.stalled && rpm > 200;
-    const f = rpm / 60 * 2; // tändningar per sekund (4 cyl)
-    const load = car.throttleEff;
+    const load = Math.max(0, Math.min(1, car.throttleEff));
     const set = (p, v) => p.setTargetAtTime(v, t, k);
-    set(this.o1.o.frequency, f);
-    set(this.o2.o.frequency, f * 0.5);
-    set(this.o3.o.frequency, f * 2);
-    set(this.o4.o.frequency, f * 1.5);
-    set(this.o5.frequency, f * 2);
-    set(this.am.frequency, f * 0.5);
-    set(this.engFilter.frequency, 380 + load * 2600 + rpm * 0.32);
-    set(this.engGain.gain, running ? 0.16 + load * 0.22 : 0);
-    set(this.amDepth.gain, running ? 0.05 + (1 - load) * 0.06 : 0);
-    const vvtl = rpm > 6200 ? Math.min(1, (rpm - 6200) / 400) : 0;
-    set(this.vvFilter.frequency, f * 3);
-    set(this.vvGain.gain, running ? vvtl * (0.05 + load * 0.12) : 0);
-    set(this.intakeFilter.frequency, 300 + rpm * 0.35);
-    set(this.intakeGain.gain, running ? load * (0.05 + rpm / 9000 * 0.18) : 0);
+    const ins = this.inside;
+    // VVTL-i växlar till den höga kammen vid ~6200 rpm (bara med gas på)
+    const vvtl = rpm > 6000 && load > 0.3 ? Math.min(1, (rpm - 6000) / 300) : 0;
+    const r = rpm / 9000;
+    if (this.eng) {
+      this.eng.rpm.setTargetAtTime(rpm, t, 0.012);
+      set(this.eng.load, load);
+      this.eng.on.setValueAtTime(running ? 1 : 0, t);
+      this.eng.vvtl.setTargetAtTime(vvtl, t, 0.03);
+    }
+    // avgaser: dominerar utifrån; ljuddämparen öppnar upp med last och varv
+    set(this.exhLP.frequency, 700 + load * 2200 + rpm * 0.35);
+    set(this.exhGain.gain, running ? (0.55 + load * 0.45) * (ins ? 0.65 : 1) : 0);
+    // insug: luftlådan sitter bakom förarens huvud – dominerar inifrån, ylar på höga kammen
+    set(this.intRes.frequency, 380 + r * 260);
+    set(this.intHorn.gain, vvtl * 9);
+    set(this.intLP.frequency, 1200 + r * 2400 + vvtl * 3000);
+    set(this.intGain.gain, running ? (0.12 + load * 0.55) * (1 + vvtl * 0.7) * (ins ? 1.6 : 0.6) : 0);
+    // mekaniskt surr
+    set(this.mechF.frequency, 1800 + rpm * 0.45);
+    set(this.mechGain.gain, running ? 0.006 + r * r * 0.035 * (ins ? 1.4 : 0.6) : 0);
     const sl = car.slide || 0;
     set(this.tyreGain.gain, Math.min(0.5, sl * 0.9));
     set(this.squealTone.gain, Math.min(0.08, sl * 0.12));
     const grass = car.wheels.some(w => w.contact && w.surf === 1) ? Math.min(1, car.speed / 15) : 0;
     set(this.gravelGain.gain, grass * 0.35);
     const sp = car.speed;
-    const ins = this.inside;
-    // i Elisen sitter motorn precis bakom ryggen: insuget hörs mer inifrån
-    if (ins) set(this.intakeGain.gain, running ? load * (0.08 + rpm / 9000 * 0.26) : 0);
     const onGrass = car.wheels.some(w => w.contact && w.surf === 1);
     set(this.roadGain.gain, Math.min(0.4, sp * (onGrass ? 0.02 : 0.007)) * (ins ? 1 : 0.3));
     set(this.roadF.frequency, 70 + sp * 2.5);

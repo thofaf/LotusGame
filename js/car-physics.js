@@ -62,7 +62,7 @@ export class CarPhysics {
         inertia: front ? P.wheelInertiaF : P.wheelInertiaR,
         k, c: 2 * P.dampRatio * Math.sqrt(k * cm), staticLoad,
         comp: 0, prevComp: 0, load: 0, omega: 0, angle: 0, steer: 0,
-        contact: false, surf: SURF_ROAD, slipRatio: 0, slipAngle: 0, slide: 0,
+        contact: false, surf: SURF_ROAD, slipRatio: 0, slipAngle: 0, slide: 0, Fy: 0,
         hubLocalY: -P.suspDroop,
         cp: new THREE.Vector3(), n: new THREE.Vector3(0, 1, 0),
       };
@@ -86,7 +86,9 @@ export class CarPhysics {
 
     // indata
     this.input = { steer: 0, throttle: 0, brake: 0, clutch: 0, handbrake: 0 };
-    this.settings = { autoClutch: true, requireClutch: false, automatic: false, absAssist: false, tcAssist: false };
+    // grip: multiplikator på däckens friktion (1 = standard, P.mu)
+    // gripBalance: -1..1, flyttar grepp mellan fram- och bakaxel (+ = mer fram -> mindre understyrning / mer överstyrning)
+    this.settings = { autoClutch: true, requireClutch: false, automatic: false, absAssist: false, tcAssist: false, grip: 1, gripBalance: 0 };
 
     // kollisionspunkter i karossen
     this.bodyPoints = [
@@ -271,7 +273,7 @@ export class CarPhysics {
       const w = W[i];
       const r = tmpV3.copy(w.attach).applyMatrix3(this.rot);
       if (!w.contact) {
-        w.load = 0; w.slide = 0; w.slipRatio = 0;
+        w.load = 0; w.slide = 0; w.slipRatio = 0; w.Fy = 0; w.slipAngle = 0;
         // fritt snurrande hjul
         let Td = w.rear ? driveTorqueEach : 0;
         const I = w.inertia + (w.rear ? lockedInertia + clutchImplicit * dt : 0);
@@ -303,7 +305,9 @@ export class CarPhysics {
 
       const surfMu = w.surf === SURF_GRASS ? 0.62 : 1.0;
       const loadSens = 1 - 0.07 * (Fn / w.staticLoad - 1);
-      const muN = P.mu * surfMu * loadSens * Fn;
+      const bal = this.settings.gripBalance || 0;
+      const axleGrip = (this.settings.grip || 1) * (w.front ? 1 + bal : 1 - bal);
+      const muN = P.mu * axleGrip * surfMu * loadSens * Fn;
       const kp = 0.11, ap = 0.115;
       const den = Math.max(Math.abs(vLong), 2.5);
       const tanA = vLat / Math.max(Math.abs(vLong), 1.6);
@@ -341,6 +345,7 @@ export class CarPhysics {
       const [Fx, Fy] = tyre(kappa1);
       w.slipRatio = Math.abs(kappa1);
       w.slipAngle = Math.atan(tanA);
+      w.Fy = Fy; // sidokraft (+ = åt vänster), används för rattens motkraft
       const sl = Math.hypot(kappa1 / kp, tanA / ap);
       w.slide = Math.max(0, Math.min(1, (sl - 0.75) / 1.5)) * Math.min(1, speed / 4);
       slideSum += w.slide;

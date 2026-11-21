@@ -33,7 +33,9 @@ export function decodeDDS(bytes, hasS3TC) {
       mipmaps.push({ data: new Uint8Array(bytes.buffer, bytes.byteOffset + offset, size), width: w, height: h });
       offset += size; w = Math.max(1, w >> 1); h = Math.max(1, h >> 1);
     }
-    // WebGL kräver fullständig mipkedja ned till 1x1 – annars använd bara nivå 0.
+    // WebGL kräver fullständig mipkedja ned till 1x1. Kunos texturer slutar ofta vid 256x256:
+    // fyll på de minsta nivåerna med enfärgade block (medelfärg) så att mipmapping fungerar.
+    if (mipmaps.length > 1) completeMipChain(mipmaps, fcc, blockBytes);
     const complete = mipmaps.length && mipmaps[mipmaps.length - 1].width === 1 && mipmaps[mipmaps.length - 1].height === 1;
     const tex = new THREE.CompressedTexture(complete ? mipmaps : [mipmaps[0]], width, height, format);
     tex.minFilter = complete ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
@@ -77,10 +79,54 @@ export function decodeDDS(bytes, hasS3TC) {
   return tex;
 }
 
+// Bygger ut en avbruten DXT-mipkedja ned till 1x1. Minsta befintliga nivå avkodas,
+// skalas ned med boxfilter och varje ny nivå kodas som enfärgade DXT-block.
+function completeMipChain(mipmaps, fcc, blockBytes) {
+  let last = mipmaps[mipmaps.length - 1];
+  if (last.width === 1 && last.height === 1) return;
+  let w = last.width, h = last.height;
+  let px = decodeDXT(last.data, 0, w, h, fcc);
+  while (w > 1 || h > 1) {
+    const nw = Math.max(1, w >> 1), nh = Math.max(1, h >> 1);
+    const np = new Uint8Array(nw * nh * 4);
+    for (let y = 0; y < nh; y++) for (let x = 0; x < nw; x++) for (let c = 0; c < 4; c++) {
+      let s = 0, n = 0;
+      for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
+        const sx = Math.min(w - 1, x * 2 + dx), sy = Math.min(h - 1, y * 2 + dy);
+        s += px[(sy * w + sx) * 4 + c]; n++;
+      }
+      np[(y * nw + x) * 4 + c] = s / n;
+    }
+    px = np; w = nw; h = nh;
+    // ett block per 4x4 (minst ett block); blockets färg = pixeln i blockets hörn
+    const bw = Math.max(1, Math.ceil(w / 4)), bh = Math.max(1, Math.ceil(h / 4));
+    const data = new Uint8Array(bw * bh * blockBytes);
+    for (let by = 0; by < bh; by++) for (let bx = 0; bx < bw; bx++) {
+      const o = (Math.min(h - 1, by * 4) * w + Math.min(w - 1, bx * 4)) * 4;
+      solidBlock(data, (by * bw + bx) * blockBytes, fcc, px[o], px[o + 1], px[o + 2], px[o + 3]);
+    }
+    mipmaps.push({ data, width: w, height: h });
+  }
+}
+function solidBlock(out, o, fcc, r, g, b, a) {
+  const c = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+  if (fcc === 'DXT5') { out[o] = a; out[o + 1] = a; o += 8; } // alfaindex 0 = a0
+  else if (fcc === 'DXT3') { const n = (a >> 4) * 17; for (let i = 0; i < 8; i++) out[o + i] = n; o += 8; }
+  out[o] = c & 255; out[o + 1] = c >> 8; out[o + 2] = c & 255; out[o + 3] = c >> 8;
+  // DXT1 med c0 == c1: index 0 = c0, index 3 = genomskinlig
+  const idx = fcc === 'DXT1' && a < 128 ? 255 : 0;
+  out[o + 4] = out[o + 5] = out[o + 6] = out[o + 7] = idx;
+}
+
 // Reserv om GPU:n saknar S3TC-stöd: avkoda DXT i mjukvara (endast nivå 0).
-function softwareDXT(bytes, width, height, fcc, blockBytes) {
+function softwareDXT(bytes, width, height, fcc) {
+  const tex = new THREE.DataTexture(decodeDXT(bytes, 128, width, height, fcc), width, height, THREE.RGBAFormat);
+  tex.generateMipmaps = true; tex.minFilter = THREE.LinearMipmapLinearFilter; tex.needsUpdate = true;
+  return tex;
+}
+function decodeDXT(bytes, start, width, height, fcc) {
   const out = new Uint8Array(width * height * 4);
-  let p = 128;
+  let p = start;
   const c = new Uint8Array(16);
   const bw = Math.max(1, width >> 2), bh = Math.max(1, height >> 2);
   for (let by = 0; by < bh; by++) for (let bx = 0; bx < bw; bx++) {
@@ -117,9 +163,7 @@ function softwareDXT(bytes, width, height, fcc, blockBytes) {
       out[o] = cols[ci][0]; out[o + 1] = cols[ci][1]; out[o + 2] = cols[ci][2];
       out[o + 3] = (fcc === 'DXT1' && c0 <= c1 && ci === 3) ? 0 : alpha[i];
     }
-    void blockBytes; void c;
+    void c;
   }
-  const tex = new THREE.DataTexture(out, width, height, THREE.RGBAFormat);
-  tex.generateMipmaps = true; tex.minFilter = THREE.LinearMipmapLinearFilter; tex.needsUpdate = true;
-  return tex;
+  return out;
 }

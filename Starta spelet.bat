@@ -1,3 +1,3 @@
 @echo off
-title Lotus Elise - Stelvio (server)
+title Lotus Elise (server)
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0serve.ps1"

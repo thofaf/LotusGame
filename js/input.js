@@ -16,8 +16,12 @@ export const ACTIONS_BUTTON = [
 ];
 
 export const DEFAULT_SETTINGS = {
+  track: 'alpine_pass',    // vald bana (se TRACKS i main.js)
   wheelRotation: 900,      // grader, ska matcha inställningen i Thrustmaster Control Panel
   steerLinearity: 1.0,
+  steerSensitivity: 900,
+  tyreGrip: 100,           // däckens grepp i procent av standard
+  gripBalance: 0,          // procent grepp som flyttas till framaxeln (+) eller bakaxeln (−)   // 900 = bilens ratt följer din ratt 1:1; högre = mer sväng per grad (snabbare styrväxel)
   gearbox: 'h',            // 'h' = H-växel, 'seq' = sekventiell/paddlar, 'auto' = automat
   autoClutch: true,
   requireClutch: true,     // kräv koppling för att lägga i växel (endast utan autokoppling)
@@ -45,7 +49,15 @@ export const DEFAULT_SETTINGS = {
   motionSlopes: true,     // backar och vägens lutning påverkar stolen
   motionInvertLong: false,
   motionInvertLat: false,
+  motionInvertB: false,
   motionBaud: 500000,
+  // force feedback (via ffb/FfbBridge.cs)
+  ffbEnabled: true,
+  ffbGain: 0.6,           // styrka på självcentrerande moment och stötar
+  ffbDamper: 0.25,        // dämpning (tyngd), mer vid låg fart
+  ffbRoad: 0.5,           // vägkänsla: gupp, krockar, vibration på gräs
+  ffbMinForce: 0,         // minsta kraft (dödzonskompensation)
+  ffbInvert: false,
 };
 
 export class Input {

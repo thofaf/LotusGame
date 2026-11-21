@@ -1,4 +1,4 @@
-# Enkel lokal webbserver för Lotus Elise - Stelvio.
+﻿# Enkel lokal webbserver för Lotus Elise.
 # Startas via "Starta spelet.bat". Kräver inget installerat utöver Windows PowerShell.
 param([int]$Port = 8642, [switch]$NoBrowser)
 
@@ -19,9 +19,19 @@ try { $listener.Start() } catch {
   Read-Host "Tryck Enter för att stänga"; exit 1
 }
 Write-Host ""
-Write-Host "  LOTUS ELISE - STELVIO" -ForegroundColor Green
+Write-Host "  LOTUS ELISE" -ForegroundColor Green
 Write-Host "  Servern kör på $prefix"
 Write-Host "  Stäng detta fönster för att avsluta."
+
+# Force feedback: brygga webbläsare -> ratt (DirectInput via ffb\SDL2.dll), se ffb\FfbBridge.cs
+$ffbOk = $false
+try {
+  Add-Type -Path (Join-Path $root 'ffb\FfbBridge.cs') -ErrorAction Stop
+  $ffbOk = [LotusFfb.Bridge]::Start((Join-Path $root 'ffb'))
+  if (-not $ffbOk) { Write-Host ("  Force feedback: " + [LotusFfb.Bridge]::Status) -ForegroundColor Yellow }
+} catch {
+  Write-Host "  Force feedback kunde inte startas: $($_.Exception.Message)" -ForegroundColor Yellow
+}
 Write-Host ""
 if (-not $NoBrowser) { Start-Process $prefix }
 
@@ -44,6 +54,10 @@ while ($listener.IsListening) {
     if ($req.HttpMethod -eq 'POST' -and $path -eq '/__log') {
       $sr = New-Object IO.StreamReader($req.InputStream); Write-Host ("LOG: " + $sr.ReadToEnd())
       $res.StatusCode = 200; $res.Close(); continue
+    }
+    if ($path -eq '/__ffb') {
+      if ($ffbOk -and $req.IsWebSocketRequest) { [LotusFfb.Bridge]::Accept($ctx) } else { $res.StatusCode = 503; $res.Close() }
+      continue
     }
     if ($path -eq '/') { $path = '/index.html' }
     $file = [IO.Path]::GetFullPath((Join-Path $root $path.TrimStart('/')))
